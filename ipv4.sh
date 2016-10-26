@@ -49,8 +49,8 @@ then
   for ARP_TRUST_IP in $ARP_TRUST_IPS
   do
     MAC=`arp -D $ARP_TRUST_IP | awk 'NR==2 {print $3}'`
-    $IPT_ARP -A INPUT  -s $ARP_TRUST_IP --source-mac $ROUTER_MAC -j ACCEPT
-    $IPT_ARP -A OUTPUT -d $ARP_TRUST_IP --destination-mac $ROUTER_MAC -j ACCEPT
+    $IPT_ARP -A INPUT  -s $ARP_TRUST_IP --source-mac $MAC -j ACCEPT
+    $IPT_ARP -A OUTPUT -d $ARP_TRUST_IP --destination-mac $MAC -j ACCEPT
   done
 fi
 # Flushing all rules
