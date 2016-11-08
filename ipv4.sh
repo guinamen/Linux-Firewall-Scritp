@@ -4,18 +4,22 @@
 IPT="/sbin/iptables"
 IPT_ARP="/sbin/arptables"
 INTERFACE="enp0s3"
-
 INTERFACE_INFO=$(ip addr show dev ${INTERFACE})
 INTERFACE_MAC=$(awk 'NR==2 {print $2}' <<<  "$INTERFACE_INFO" )
 INTERFACE_IP=$(awk 'NR==3 {print $2}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
-INTERFACE_NET=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO")
+INTERFACE_NET_PREFIX=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO" |  sed 's/[^\/]*\///g')
 INTERFACE_BROADCAST=$(awk 'NR==3 {print $4}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
+
+# Network adress calculator
+IFS=. read -r i1 i2 i3 i4 <<< $INTERFACE_IP
+IFS=. read -r xx m1 m2 m3 m4 <<< $(for a in $(seq 1 32); do if [ $(((a - 1) % 8)) -eq 0 ]; then echo -n .; fi; if [ $a -le $INTERFACE_NET_PREFIX ]; then echo -n 1; else echo -n 0; fi; done)
+INTERFACE_NET=$(printf "%d.%d.%d.%d/%s" "$((i1 & (2#$m1)))" "$((i2 & (2#$m2)))" "$((i3 & (2#$m3)))" "$((i4 & (2#$m4)))" "$INTERFACE_NET_PREFIX")
 ROUTER=$(ip route show dev ${INTERFACE}  | awk 'NR==1 {print $3}')
 
-# DNS configuration
+#DNS configuration
 DNS_SERVERS=$(grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /etc/resolv.conf | tr '\n' ' ')
 
-# Networ definitions
+#Networ definitions
 LOOPBACK="127.0.0.0/8"
 CLASS_A="10.0.0.0/8"
 CLASS_B="172.16.0.0/12"
@@ -23,9 +27,12 @@ CLASS_C="192.168.0.0/16"
 CLASS_D_MULTICAST="224.0.0.0/4"
 CLASS_E_RESERVED_NET="240.0.0.0/5"
 
-# Trusted ports
+#Trusted ports
 SERVER_PORTS="22 80 443"
 CLIENT_PORTS="20 21 22 80 443"
+
+#Trust clients
+SERVER_CLIENTS="cachepbh.pbh:3128"
 
 #Up ports
 UP_PORTS="1024:65535"
@@ -33,8 +40,8 @@ TR_SRC_PORTS="32769:65535"
 TR_DEST_PORTS="33434:33523"
 
 #Configurations
-LOG=false
-APR=false
+LOG=true
+ARP=true
 
 #Trusted network ips
 ARP_TRUST_IPS="$ROUTER 10.0.58.193"
@@ -124,6 +131,14 @@ do
 
   $IPT -A OUTPUT -p tcp -s $INTERFACE_IP --sport $UP_PORTS -d $DNS_SERVER --dport 53 -m state --state NEW,ESTABLISHED -j ACCEPT
   $IPT -A INPUT  -p tcp -s $DNS_SERVER --sport 53 -d $INTERFACE_IP --dport $UP_PORTS -m state --state ESTABLISHED -j ACCEPT
+done
+
+#Allow Server clients
+for SERVER_CLIENT in $SERVER_CLIENTS
+do
+  IFS=':' read -r SERVER PORT <<< "$SERVER_CLIENT"
+  $IPT -A OUTPUT -p tcp -s $INTERFACE_IP --sport $UP_PORTS -d $SERVER --dport $PORT -m state --state NEW,ESTABLISHED -j ACCEPT
+  $IPT -A INPUT  -p tcp -s $SERVER --sport $PORT -d $INTERFACE_IP --dport $UP_PORTS -m state --state ESTABLISHED -j ACCEPT
 done
 
 #Allow outbound
