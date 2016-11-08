@@ -4,15 +4,16 @@
 IPT="/sbin/iptables"
 IPT_ARP="/sbin/arptables"
 INTERFACE="enp0s3"
-INTERFACE_INFO=`ip addr show dev ${INTERFACE}`
-INTERFACE_MAC=`echo "$INTERFACE_INFO" | awk 'NR==2 {print $2}'`
-INTERFACE_IP=`echo "$INTERFACE_INFO" | awk 'NR==3 {print $2}' | sed 's/\/.*//'`
-INTERFACE_NET=`echo "$INTERFACE_INFO" | awk 'NR==3{print $2}'`
-INTERFACE_BROADCAST=`echo "$INTERFACE_INFO" | awk 'NR==3 {print $4}' | sed 's/\/.*//'`
-ROUTER=`ip route show dev ${INTERFACE}  | awk 'NR==1 {print $3}'`
+
+INTERFACE_INFO=$(ip addr show dev ${INTERFACE})
+INTERFACE_MAC=$(awk 'NR==2 {print $2}' <<<  "$INTERFACE_INFO" )
+INTERFACE_IP=$(awk 'NR==3 {print $2}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
+INTERFACE_NET=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO")
+INTERFACE_BROADCAST=$(awk 'NR==3 {print $4}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
+ROUTER=$(ip route show dev ${INTERFACE}  | awk 'NR==1 {print $3}')
 
 # DNS configuration
-DNS_SERVERS=`grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /etc/resolv.conf | tr '\n' ' '`
+DNS_SERVERS=$(grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /etc/resolv.conf | tr '\n' ' ')
 
 # Networ definitions
 LOOPBACK="127.0.0.0/8"
@@ -48,7 +49,7 @@ then
   $IPT_ARP -P OUTPUT DROP
   for ARP_TRUST_IP in $ARP_TRUST_IPS
   do
-    MAC=`arp -D $ARP_TRUST_IP | awk 'NR==2 {print $3}'`
+    MAC=$(arp -D $ARP_TRUST_IP | awk 'NR==2 {print $3}')
     $IPT_ARP -A INPUT  -s $ARP_TRUST_IP --source-mac $MAC -j ACCEPT
     $IPT_ARP -A OUTPUT -d $ARP_TRUST_IP --destination-mac $MAC -j ACCEPT
   done
