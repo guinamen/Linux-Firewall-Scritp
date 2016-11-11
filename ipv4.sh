@@ -27,12 +27,17 @@ CLASS_C="192.168.0.0/16"
 CLASS_D_MULTICAST="224.0.0.0/4"
 CLASS_E_RESERVED_NET="240.0.0.0/5"
 
-#Trusted ports
-SERVER_PORTS="22 80 443"
-CLIENT_PORTS="20 21 22 80 443"
+#IN
+#Trusted in ports
+GENERAL_SERVER_PORTS="22 80 443"
+#Trusted in server and port
+SPECIFIC_SERVER_PORTS="10.0.58.193:9090 10.0.58.193:9091"
 
-#Trust clients
-SERVER_CLIENTS="cachepbh.pbh:3128"
+#OUT
+#Trusted out ports
+GENERAL_CLIENT_PORTS="20 21 22 80 443"
+#Trust out server and port
+SPECIFIC_CLIENT_PORTS="cachepbh.pbh:3128"
 
 #Up ports
 UP_PORTS="1024:65535"
@@ -117,10 +122,16 @@ $IPT -A INPUT -i $INTERFACE -d $INTERFACE_BROADCAST -j DROP
 
 
 # Allow inbound
-for PORT in $SERVER_PORTS
+for PORT in $GENERAL_SERVER_PORTS
 do
   $IPT -A INPUT  -i $INTERFACE -p tcp -s $INTERFACE_NET -d $INTERFACE_IP --sport $UP_PORTS --dport $PORT -m state --state NEW,ESTABLISHED -j ACCEPT
   $IPT -A OUTPUT -o $INTERFACE -p tcp -s $INTERFACE_IP -d 0/0 --sport $PORT --dport $UP_PORTS -m state --state ESTABLISHED -j ACCEPT
+done
+
+for SPECIFIC_SERVER_PORTS in $SPECIFIC_SERVER_PORTS
+do
+  IFS=':' read -r SERVER PORT <<< "$SPECIFIC_SERVER_PORTS"
+  #TODO: ALLOW INBOUND FOR A SPECIFIC SERVER
 done
 
 #Allow DNS consult
@@ -134,7 +145,7 @@ do
 done
 
 #Allow Server clients
-for SERVER_CLIENT in $SERVER_CLIENTS
+for SERVER_CLIENT in $SPECIFIC_CLIENT_PORTS
 do
   IFS=':' read -r SERVER PORT <<< "$SERVER_CLIENT"
   $IPT -A OUTPUT -p tcp -s $INTERFACE_IP --sport $UP_PORTS -d $SERVER --dport $PORT -m state --state NEW,ESTABLISHED -j ACCEPT
@@ -142,7 +153,7 @@ do
 done
 
 #Allow outbound
-for PORT in $CLIENT_PORTS
+for PORT in $GENERAL_CLIENT_PORTS
 do
   $IPT -A INPUT  -i $INTERFACE -p tcp --sport $PORT -m state --state ESTABLISHED     -j ACCEPT
   $IPT -A OUTPUT -o $INTERFACE -p tcp --dport $PORT -m state --state NEW,ESTABLISHED -j ACCEPT
