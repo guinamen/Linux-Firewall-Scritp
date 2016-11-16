@@ -1,23 +1,16 @@
 #!/bin/sh
-# My system IP/set ipv 4 address of server
-# Interface configuration
+##################################################################
+##Firewall configuration script
+##The script objective is create a firewall configuration
+##for service in format <IN OUT>:<PROTOCOL>@<IP IP/NETWORK>:<PORT>
+##################################################################
+
+#Firewall  tools
 IPT="/sbin/iptables"
 IPT_ARP="/sbin/arptables"
-INTERFACE="enp0s3"
-INTERFACE_INFO=$(ip addr show dev ${INTERFACE})
-INTERFACE_MAC=$(awk 'NR==2 {print $2}' <<<  "$INTERFACE_INFO" )
-INTERFACE_IP=$(awk 'NR==3 {print $2}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
-INTERFACE_NET_PREFIX=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO" |  sed 's/[^\/]*\///g')
-INTERFACE_BROADCAST=$(awk 'NR==3 {print $4}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
 
-# Network adress calculator
-IFS=. read -r i1 i2 i3 i4 <<< $INTERFACE_IP
-IFS=. read -r xx m1 m2 m3 m4 <<< $(for a in $(seq 1 32); do if [ $(((a - 1) % 8)) -eq 0 ]; then echo -n .; fi; if [ $a -le $INTERFACE_NET_PREFIX ]; then echo -n 1; else echo -n 0; fi; done)
-INTERFACE_NET=$(printf "%d.%d.%d.%d/%s" "$((i1 & (2#$m1)))" "$((i2 & (2#$m2)))" "$((i3 & (2#$m3)))" "$((i4 & (2#$m4)))" "$INTERFACE_NET_PREFIX")
-ROUTER=$(ip route show dev ${INTERFACE}  | awk 'NR==1 {print $3}')
-
-#DNS configuration
-DNS_SERVERS=$(grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /etc/resolv.conf | tr '\n' ' ')
+#Interface
+INTERFACE=$1
 
 #Networ definitions
 LOOPBACK="127.0.0.0/8"
@@ -26,6 +19,68 @@ CLASS_B="172.16.0.0/12"
 CLASS_C="192.168.0.0/16"
 CLASS_D_MULTICAST="224.0.0.0/4"
 CLASS_E_RESERVED_NET="240.0.0.0/5"
+#Up ports
+UP_PORTS="1024:65535"
+TR_SRC_PORTS="32769:65535"
+TR_DEST_PORTS="33434:33523"
+
+
+#Networ address calculator
+function networkCalc () {
+  IFS=. read -r i1 i2 i3 i4 <<< $1
+  IFS=. read -r xx m1 m2 m3 m4 <<< $(
+	for a in $(seq 1 32);
+          do
+            if [ $(((a - 1) % 8)) -eq 0 ];
+            then
+               printf ".";
+            fi;
+            if [ $a -le $2 ];
+              then
+                printf "%d" 1;
+              else
+                printf "%d" 0;
+              fi;
+          done)
+  printf "%d.%d.%d.%d/%d" "$((i1 & (2#$m1)))" "$((i2 & (2#$m2)))" "$((i3 & (2#$m3)))" "$((i4 & (2#$m4)))" "$2"
+  return 0
+}
+
+#Process a list of service in format <IN OUT>:<PROTOCOL>@<IP IP/NETWORK>:<PORT>
+function allowIn() {
+  for SERVICE in $1
+  do
+    local FLOW=""
+    local PROTOCOL=""
+    local IP=""
+    local PORT=""
+    $IPT -A INPUT  -i $INTERFACE -p $PROTOCOL -s $INTERFACE_NET -d $INTERFACE_IP --sport $UP_PORTS --dport $PORT     -m state --state NEW,ESTABLISHED -j ACCEPT
+    $IPT -A OUTPUT -o $INTERFACE -p $PROTOCOL -s $INTERFACE_IP  -d 0/0           --sport $PORT     --dport $UP_PORTS -m state --state ESTABLISHED     -j ACCEPT
+  done
+  return 0
+}
+
+#Allow arp protocols
+function allowArp() {
+  for ARP_TRUST_IP in $1
+  do
+    MAC=$(arp -D $ARP_TRUST_IP | awk 'NR==2 {print $3}')
+    $IPT_ARP -A INPUT  -s $ARP_TRUST_IP --source-mac $MAC -j ACCEPT
+    $IPT_ARP -A OUTPUT -d $ARP_TRUST_IP --destination-mac $MAC -j ACCEPT
+  done
+  return 0
+}
+
+INTERFACE_INFO=$(ip addr show dev ${INTERFACE})
+INTERFACE_MAC=$(awk 'NR==2 {print $2}' <<<  "$INTERFACE_INFO" )
+INTERFACE_IP=$(awk 'NR==3 {print $2}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
+INTERFACE_NET_PREFIX=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO" |  sed 's/[^\/]*\///g')
+INTERFACE_BROADCAST=$(awk 'NR==3 {print $4}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
+# Network adress calculator
+INTERFACE_NET=$(networkCalc ${INTERFACE_IP} ${INTERFACE_NET_PREFIX})
+ROUTER=$(ip route show dev ${INTERFACE}  | awk 'NR==1 {print $3}')
+#DNS configuration
+DNS_SERVERS=$(grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /etc/resolv.conf | tr '\n' ' ')
 
 #IN
 #Trusted in ports
@@ -47,7 +102,6 @@ TR_DEST_PORTS="33434:33523"
 #Configurations
 LOG=true
 ARP=true
-
 #Trusted network ips
 ARP_TRUST_IPS="$ROUTER 10.0.58.193"
 
@@ -59,12 +113,7 @@ then
   #Setting default filter policy
   $IPT_ARP -P INPUT DROP
   $IPT_ARP -P OUTPUT DROP
-  for ARP_TRUST_IP in $ARP_TRUST_IPS
-  do
-    MAC=$(arp -D $ARP_TRUST_IP | awk 'NR==2 {print $3}')
-    $IPT_ARP -A INPUT  -s $ARP_TRUST_IP --source-mac $MAC -j ACCEPT
-    $IPT_ARP -A OUTPUT -d $ARP_TRUST_IP --destination-mac $MAC -j ACCEPT
-  done
+  allowArp $ARP_TRUST_IPS
 fi
 # Flushing all rules
 $IPT -F
