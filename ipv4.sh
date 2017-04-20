@@ -46,9 +46,9 @@ function networkCalc () {
   return 0
 }
 
-#Process a list of service in format <IN OUT>:<PROTOCOL>@<IP IP/NETWORK>:<PORT>
+#Process a list of service in format <IN OUT>:<PROTOCOL>@<SOURCE IP OR IP/NETWORK>|<DESTINY IP OR NETWORK>:<PORT>
 function allowIn() {
-  for SERVICE in $1
+  for SERVICE in $@;
   do
     local FLOW=""
     local PROTOCOL=""
@@ -62,9 +62,21 @@ function allowIn() {
 
 #Allow arp protocols
 function allowArp() {
-  for ARP_TRUST_IP in $1
+  ARP_TABLE=$(arp -e)
+  for ARP_TRUST_IP in $@;
   do
-    MAC=$(arp -D $ARP_TRUST_IP | awk 'NR==2 {print $3}')
+    if ! grep $ARP_TRUST_IP <<< $ARP_TABLE;
+    then
+      ping $ARP_TRUST_IP -c 1 -q >> /dev/null
+      if [ $? -eq 0 ]
+      then
+	MAC=$(arp | grep $ARP_TRUST_IP | awk '{print $3}')
+      else
+        continue
+      fi
+    else
+      MAC=$(arp | grep $ARP_TRUST_IP | awk '{print $3}')
+    fi
     $IPT_ARP -A INPUT  -s $ARP_TRUST_IP --source-mac $MAC -j ACCEPT
     $IPT_ARP -A OUTPUT -d $ARP_TRUST_IP --destination-mac $MAC -j ACCEPT
   done
@@ -74,7 +86,7 @@ function allowArp() {
 INTERFACE_INFO=$(ip addr show dev ${INTERFACE})
 INTERFACE_MAC=$(awk 'NR==2 {print $2}' <<<  "$INTERFACE_INFO" )
 INTERFACE_IP=$(awk 'NR==3 {print $2}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
-INTERFACE_NET_PREFIX=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO" |  sed 's/[^\/]*\///g')
+INTERFACE_NET_PREFIX=$(awk 'NR==3{print $2}' <<< "$INTERFACE_INFO" | sed 's/[^\/]*\///g')
 INTERFACE_BROADCAST=$(awk 'NR==3 {print $4}' <<< "$INTERFACE_INFO" | sed 's/\/.*//')
 # Network adress calculator
 INTERFACE_NET=$(networkCalc ${INTERFACE_IP} ${INTERFACE_NET_PREFIX})
@@ -101,19 +113,21 @@ TR_DEST_PORTS="33434:33523"
 
 #Configurations
 LOG=true
+LOG_LIMIT=true
 ARP=true
+
 #Trusted network ips
-ARP_TRUST_IPS="$ROUTER 10.0.58.193"
+ARP_TRUST_IPS="$ROUTER 10.0.59.137"
 
 if [ "$ARP" = true ] ;
 then
   #Clean rules
   $IPT_ARP -F
   $IPT_ARP -X
+  allowArp $ARP_TRUST_IPS
   #Setting default filter policy
   $IPT_ARP -P INPUT DROP
   $IPT_ARP -P OUTPUT DROP
-  allowArp $ARP_TRUST_IPS
 fi
 # Flushing all rules
 $IPT -F
@@ -177,10 +191,11 @@ do
   $IPT -A OUTPUT -o $INTERFACE -p tcp -s $INTERFACE_IP -d 0/0 --sport $PORT --dport $UP_PORTS -m state --state ESTABLISHED -j ACCEPT
 done
 
-for SPECIFIC_SERVER_PORTS in $SPECIFIC_SERVER_PORTS
+for SPECIFIC_SERVER_PORT in $SPECIFIC_SERVER_PORTS
 do
-  IFS=':' read -r SERVER PORT <<< "$SPECIFIC_SERVER_PORTS"
-  #TODO: ALLOW INBOUND FOR A SPECIFIC SERVER
+  IFS=':' read -r SERVER PORT <<< "$SPECIFIC_SERVER_PORT"
+  $IPT -A INPUT  -i $INTERFACE -p tcp -s $INTERFACE_NET -d $INTERFACE_IP --sport $UP_PORTS --dport $PORT -m state --state NEW,ESTABLISHED -j ACCEPT
+  $IPT -A OUTPUT -o $INTERFACE -p tcp -s $INTERFACE_IP -d $SERVER --sport $PORT --dport $UP_PORTS -m state --state ESTABLISHED -j ACCEPT
 done
 
 #Allow DNS consult
@@ -251,25 +266,31 @@ $IPT -A OUTPUT -o $INTERFACE -p icmp -m state --state NEW,ESTABLISHED,RELATED -j
 # Any udp not already allowed is logged and then dropped.
 if [ "$LOG" = true ] ;
 then
-  $IPT -A INPUT  -i $INTERFACE -p udp -j LOG --log-prefix "IPTABLES UDP-IN: "
+  if [ "$LOG_LIMIT" = true ] ;
+  then
+    LIMIT="-m limit --limit 1/m --limit-burst 5"
+  else
+    LIMIT=""
+  fi
+  $IPT -A INPUT  -i $INTERFACE -p udp $LIMIT -j LOG --log-prefix "IPT UDP-IN: " --log-level info
   $IPT -A INPUT  -i $INTERFACE -p udp -j DROP
-  $IPT -A OUTPUT -o $INTERFACE -p udp -j LOG --log-prefix "IPTABLES UDP-OUT: "
+  $IPT -A OUTPUT -o $INTERFACE -p udp $LIMIT -j LOG --log-prefix "IPT UDP-OUT: " --log-level info
   $IPT -A OUTPUT -o $INTERFACE -p udp -j DROP
   # Any icmp not already allowed is logged and then dropped.
-  $IPT -A INPUT  -i $INTERFACE -p icmp -j LOG --log-prefix "IPTABLES ICMP-IN: "
+  $IPT -A INPUT  -i $INTERFACE -p icmp $LIMIT -j LOG --log-prefix "IPT ICMP-IN: " --log-level info
   $IPT -A INPUT  -i $INTERFACE -p icmp -j DROP
-  $IPT -A OUTPUT -o $INTERFACE -p icmp -j LOG --log-prefix "IPTABLES ICMP-OUT: "
+  $IPT -A OUTPUT -o $INTERFACE -p icmp $LIMIT -j LOG --log-prefix "IPT ICMP-OUT: " --log-level info
   $IPT -A OUTPUT -o $INTERFACE -p icmp -j DROP
   # Any tcp not already allowed is logged and then dropped.
-  $IPT -A INPUT  -i $INTERFACE -p tcp -j LOG --log-prefix "IPTABLES TCP-IN: "
+  $IPT -A INPUT  -i $INTERFACE -p tcp $LIMIT -j LOG --log-prefix "IPT TCP-IN: " --log-level info
   $IPT -A INPUT  -i $INTERFACE -p tcp -j DROP
-  $IPT -A OUTPUT -o $INTERFACE -p tcp -j LOG --log-prefix "IPTABLES TCP-OUT: "
+  $IPT -A OUTPUT -o $INTERFACE -p tcp $LIMIT -j LOG --log-prefix "IPT TCP-OUT: " --log-level info
   $IPT -A OUTPUT -o $INTERFACE -p tcp -j DROP
   # Anything else not already allowed is logged and then dropped.
   # It will be dropped by the default policy anyway ........ but let's be paranoid.
-  $IPT -A INPUT  -i $INTERFACE -j LOG --log-prefix "IPTABLES PROTOCOL-X-IN: "
+  $IPT -A INPUT  -i $INTERFACE -j LOG --log-prefix "IPT PROTOCOL-X-IN: "
   $IPT -A INPUT  -i $INTERFACE -j DROP
-  $IPT -A OUTPUT -o $INTERFACE -j LOG --log-prefix "IPTABLES PROTOCOL-X-OUT: "
+  $IPT -A OUTPUT -o $INTERFACE -j LOG --log-prefix "IPT PROTOCOL-X-OUT: "
   $IPT -A OUTPUT -o $INTERFACE -j DROP
 fi
 
